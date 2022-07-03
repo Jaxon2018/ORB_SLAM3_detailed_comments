@@ -114,12 +114,14 @@ Eigen::Matrix3f InverseRightJacobianSO3(const Eigen::Vector3f &v)
 {
     return InverseRightJacobianSO3(v(0), v(1), v(2));
 }
+// ---功能函数---
+
 
 /**
  * @brief                  计算旋转角度积分量
  * 
- * @param[in] angVel       陀螺仪数据
- * @param[in] imuBias      陀螺仪偏置
+ * @param[in] angVel       某一时刻陀螺仪数据-角速度
+ * @param[in] imuBias      该时刻对应的陀螺仪偏置-角速度零偏
  * @param[in] time         两帧间的时间差
  */
 IntegratedRotation::IntegratedRotation(const Eigen::Vector3f &angVel, const Bias &imuBias, const float &time)
@@ -141,12 +143,16 @@ IntegratedRotation::IntegratedRotation(const Eigen::Vector3f &angVel, const Bias
     // eps = 1e-4 是一个小量，根据罗德里格斯公式求极限，后面的高阶小量忽略掉得到此式
     if (d < eps)
     {
+        // 小量时
+        // 经典预积分论文公式4
         deltaR = Eigen::Matrix3f::Identity() + W;
         rightJ = Eigen::Matrix3f::Identity();
     }
     else
     {
+        // 经典预积分论文公式3
         deltaR = Eigen::Matrix3f::Identity() + W * sin(d) / d + W * W * (1.0f - cos(d)) / d2;
+        // 经典预积分论文公式8 
         rightJ = Eigen::Matrix3f::Identity() - W * (1.0f - cos(d)) / d2 + W * W * (d - sin(d)) / (d2 * d);
     }
 }
@@ -154,7 +160,7 @@ IntegratedRotation::IntegratedRotation(const Eigen::Vector3f &angVel, const Bias
 /** 
  * @brief 预积分类构造函数，根据输入的偏置初始化预积分参数
  * @param b_ 偏置
- * @param calib imu标定参数的类
+ * @param calib imu标定参数的类 IMU和相机的外参
  */
 Preintegrated::Preintegrated(const Bias &b_, const Calib &calib)
 {
@@ -163,7 +169,7 @@ Preintegrated::Preintegrated(const Bias &b_, const Calib &calib)
     Initialize(b_);
 }
 
-// Copy constructor
+// Copy constructor 上一时刻预积分的量拿出来赋给成员变量
 Preintegrated::Preintegrated(Preintegrated *pImuPre) 
     : dT(pImuPre->dT), C(pImuPre->C), Info(pImuPre->Info),
     Nga(pImuPre->Nga), NgaWalk(pImuPre->NgaWalk), b(pImuPre->b), dR(pImuPre->dR), dV(pImuPre->dV),
@@ -208,7 +214,7 @@ void Preintegrated::Initialize(const Bias &b_)
 {
     dR.setIdentity();
     dV.setZero();
-    dP.setZero();
+    dP.setZero();  // preintegration
     JRg.setZero();
     JVg.setZero();
     JVa.setZero();
@@ -242,7 +248,7 @@ void Preintegrated::Reintegrate()
  * 
  * @param[in] acceleration  加速度计数据
  * @param[in] angVel        陀螺仪数据
- * @param[in] dt            两图像 帧之间时间差
+ * @param[in] dt            两图像帧之间时间差
  */
 void Preintegrated::IntegrateNewMeasurement(const Eigen::Vector3f &acceleration, const Eigen::Vector3f &angVel, const float &dt)
 {
@@ -253,6 +259,7 @@ void Preintegrated::IntegrateNewMeasurement(const Eigen::Vector3f &acceleration,
     // Velocity is updated secondly, as it depends on previously computed rotation.
     // Rotation is the last to be updated.
 
+    // AB时刻变化，每帧都要计算
     // Matrices to compute covariance
     // Step 1.构造协方差矩阵
     // 噪声矩阵的传递矩阵，这部分用于计算i到j-1历史噪声或者协方差
@@ -268,16 +275,19 @@ void Preintegrated::IntegrateNewMeasurement(const Eigen::Vector3f &acceleration,
     accW << angVel(0) - b.bwx, angVel(1) - b.bwy, angVel(2) - b.bwz;
 
     // 记录平均加速度和角速度
+    // 恢复总数+当前的角度预积分*加速度/前面总时间+这次这段时间
     avgA = (dT * avgA + dR * acc * dt) / (dT + dt);
     avgW = (dT * avgW + accW * dt) / (dT + dt);
 
     // Update delta position dP and velocity dV (rely on no-updated delta rotation)
     // 根据没有更新的dR来更新dP与dV  eq.(38)
+    // 保证dR是上一时刻的；
+    // 根据最新的数据更新完了
     dP = dP + dV * dt + 0.5f * dR * acc * dt * dt;
     dV = dV + dR * acc * dt;
 
     // Compute velocity and position parts of matrices A and B (rely on non-updated delta rotation)
-    // 根据η_ij = A * η_i,j-1 + B_j-1 * η_j-1中的Ａ矩阵和Ｂ矩阵对速度和位移进行更新
+    // 根据η_ij = A * η_i,j-1 + B_j-1 * η_j-1中的Ａ矩阵和Ｂ矩阵对速度和位移进行更新 eq.(38)
     Eigen::Matrix<float, 3, 3> Wacc = Sophus::SO3f::hat(acc);
 
     A.block<3, 3>(3, 0) = -dR * dt * Wacc;
@@ -289,20 +299,24 @@ void Preintegrated::IntegrateNewMeasurement(const Eigen::Vector3f &acceleration,
     // Update position and velocity jacobians wrt bias correction
     // 因为随着时间推移，不可能每次都重新计算雅克比矩阵，所以需要做J(k+1) = j(k) + (~)这类事，分解方式与AB矩阵相同
     // 论文作者对forster论文公式的基础上做了变形，然后递归更新，参见 https://github.com/UZ-SLAMLab/ORB_SLAM3/issues/212
+    // 预积分关于偏置的雅克比ch3.5.2-3.5.3
     JPa = JPa + JVa * dt - 0.5f * dR * dt * dt;
+    // =上一时刻的未更新的JPg + JVg + JRg
     JPg = JPg + JVg * dt - 0.5f * dR * dt * dt * Wacc * JRg;
     JVa = JVa - dR * dt;
     JVg = JVg - dR * dt * Wacc * JRg;
 
     // Update delta rotation
     // Step 2. 构造函数，会根据更新后的bias进行角度积分
+    // 开始更新dR
     IntegratedRotation dRi(angVel, b, dt);
     // 强行归一化使其符合旋转矩阵的格式
+    // 更新角度预积分
     dR = NormalizeRotation(dR * dRi.deltaR);
 
     // Compute rotation parts of matrices A and B
     // 补充AB矩阵
-    A.block<3, 3>(0, 0) = dRi.deltaR.transpose();
+    A.block<3, 3>(0, 0) = dRi.deltaR.transpose();  // deltaRj-1j
     B.block<3, 3>(0, 0) = dRi.rightJ * dt;
 
     // 小量delta初始为0，更新后通常也为0，故省略了小量的更新
@@ -310,6 +324,7 @@ void Preintegrated::IntegrateNewMeasurement(const Eigen::Vector3f &acceleration,
     // Step 3.更新协方差，frost经典预积分论文的第63个公式，推导了噪声（ηa, ηg）对dR dV dP 的影响
     C.block<9, 9>(0, 0) = A * C.block<9, 9>(0, 0) * A.transpose() + B * Nga * B.transpose();  // B矩阵为9*6矩阵 Nga 6*6对角矩阵，3个陀螺仪噪声的平方，3个加速度计噪声的平方
     // 这一部分最开始是0矩阵，随着积分次数增加，每次都加上随机游走，偏置的信息矩阵
+    // 零偏的协方差矩阵
     C.block<6, 6>(9, 9) += NgaWalk;
 
     // Update rotation jacobian wrt bias correction
@@ -457,7 +472,7 @@ Eigen::Vector3f Preintegrated::GetUpdatedDeltaPosition()
 }
 
 /** 
- * @brief 获取dR
+ * @brief 获取预积分dR
  * @return dR
  */
 Eigen::Matrix3f Preintegrated::GetOriginalDeltaRotation()
@@ -554,7 +569,7 @@ std::ostream &operator<<(std::ostream &out, const Bias &b)
     return out;
 }
 
-/** 
+/**关于外参的类 
  * @brief 设置参数
  * @param Tbc_ 位姿变换
  * @param ng 噪声

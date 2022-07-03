@@ -119,13 +119,14 @@ public:
 
 public:
     // Sophus/Eigen implementation
-    Sophus::SE3<float> mTcb;
+    Sophus::SE3<float> mTcb; // IMU to Camera exterior parameter
     Sophus::SE3<float> mTbc;
-    Eigen::DiagonalMatrix<float,6> Cov, CovWalk;
+    Eigen::DiagonalMatrix<float,6> Cov, CovWalk; // Noise and Walk Covariancce
     bool mbIsSet;
 };
 
 //Integration of 1 gyro measurement
+// 1 time integration eq.5.1
 class IntegratedRotation
 {
 public:
@@ -133,8 +134,8 @@ public:
     IntegratedRotation(const Eigen::Vector3f &angVel, const Bias &imuBias, const float &time);
 
 public:
-    float deltaT; //integration time
-    Eigen::Matrix3f deltaR;
+    float deltaT; //integration time for one time
+    Eigen::Matrix3f deltaR; //integrated rotation
     Eigen::Matrix3f rightJ; // right jacobian
     EIGEN_MAKE_ALIGNED_OPERATOR_NEW
 };
@@ -208,17 +209,19 @@ public:
     }
 
 public:
-    float dT;
-    Eigen::Matrix<float,15,15> C;
-    Eigen::Matrix<float,15,15> Info;
-    Eigen::DiagonalMatrix<float,6> Nga, NgaWalk;
+    float dT; // total time for several preintegrations
+    Eigen::Matrix<float,15,15> C;  // cov matrix
+    Eigen::Matrix<float,15,15> Info;  // information matrix
+    // Nga 6*6对角矩阵，3个陀螺仪噪声的平方，3个加速度计噪声的平方
+    Eigen::DiagonalMatrix<float,6> Nga, NgaWalk;  // noise and walk
 
     // Values for the original bias (when integration was computed)
-    Bias b;
-    Eigen::Matrix3f dR;
+    Bias b;  // bias when initialization
+    Eigen::Matrix3f dR; // preintegration value
     Eigen::Vector3f dV, dP;
-    Eigen::Matrix3f JRg, JVg, JVa, JPg, JPa;
-    Eigen::Vector3f avgA, avgW;
+    // bias update influence to preintegration
+    Eigen::Matrix3f JRg, JVg, JVa, JPg, JPa; // Jacobian matrix:ratation/gyro, velocity/gyro, velocity/acc, position/gyro, position/acc
+    Eigen::Vector3f avgA, avgW;  // acc avg value, gyro avg value
 
 
 private:
@@ -226,7 +229,7 @@ private:
     Bias bu;    //更新后的零偏
     // Dif between original and updated bias
     // This is used to compute the updated values of the preintegration
-    Eigen::Matrix<float,6,1> db;
+    Eigen::Matrix<float,6,1> db;  // not used yet
 
     struct integrable
     {
@@ -245,18 +248,18 @@ private:
         float t;
     };
 
-    std::vector<integrable> mvMeasurements;
+    std::vector<integrable> mvMeasurements;  // all IMU data for a several time
 
     std::mutex mMutex;
 };
 
 // Lie Algebra Functions
-Eigen::Matrix3f RightJacobianSO3(const float &x, const float &y, const float &z);
+Eigen::Matrix3f RightJacobianSO3(const float &x, const float &y, const float &z);  // eq1.6
 Eigen::Matrix3f RightJacobianSO3(const Eigen::Vector3f &v);
 
-Eigen::Matrix3f InverseRightJacobianSO3(const float &x, const float &y, const float &z);
+Eigen::Matrix3f InverseRightJacobianSO3(const float &x, const float &y, const float &z); // eq1.7
 Eigen::Matrix3f InverseRightJacobianSO3(const Eigen::Vector3f &v);
-
+// 正则化旋转矩阵
 Eigen::Matrix3f NormalizeRotation(const Eigen::Matrix3f &R);
 
 }
