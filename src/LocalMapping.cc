@@ -170,7 +170,7 @@ void LocalMapping::Run()
                 // 当前地图中关键帧数目大于2个
                 if(mpAtlas->KeyFramesInMap()>2)
                 {
-                    // Step 6.1 处于IMU模式并且当前关键帧所在的地图已经完成IMU初始化
+                    // Step 6.1 处于IMU模式并且当前关键帧所在的地图已经完成IMU初始化（IMU第一阶段初始化）
                     if(mbInertial && mpCurrentKeyFrame->GetMap()->isImuInitialized())
                     {
                         // 计算上一关键帧到当前关键帧相机光心的距离 + 上上关键帧到上一关键帧相机光心的距离
@@ -179,7 +179,7 @@ void LocalMapping::Run()
                         // 如果距离大于5厘米，记录当前KF和上一KF时间戳的差，累加到mTinit
                         if(dist>0.05)
                             mTinit += mpCurrentKeyFrame->mTimeStamp - mpCurrentKeyFrame->mPrevKF->mTimeStamp;
-                        // 当前关键帧所在的地图尚未完成IMU BA2（IMU第三阶段初始化）
+                        // 当前关键帧所在的地图尚未完成IMU VIBA2（IMU第三阶段初始化）
                         if(!mpCurrentKeyFrame->GetMap()->GetIniertialBA2())
                         {
                             // 如果累计时间差小于10s 并且 距离小于2厘米，认为运动幅度太小，不足以初始化IMU，将mbBadImu设置为true
@@ -193,7 +193,7 @@ void LocalMapping::Run()
                             }
                         }
                         // 判断成功跟踪匹配的点数是否足够多
-                        // 条件---------1.1、跟踪成功的内点数目大于75-----1.2、并且是单目--或--2.1、跟踪成功的内点数目大于100-----2.2、并且不是单目
+                        // 条件：1.1、跟踪成功的内点数目大于75--1.2、并且是单目--或--2.1、跟踪成功的内点数目大于100--2.2、并且不是单目
                         bool bLarge = ((mpTracker->GetMatchesInliers()>75)&&mbMonocular)||((mpTracker->GetMatchesInliers()>100)&&!mbMonocular);
                         // 局部地图+IMU一起优化，优化关键帧位姿、地图点、IMU参数
                         Optimizer::LocalInertialBA(mpCurrentKeyFrame, &mbAbortBA, mpCurrentKeyFrame->GetMap(),num_FixedKF_BA,num_OptKF_BA,num_MPs_BA,num_edges_BA, bLarge, !mpCurrentKeyFrame->GetMap()->GetIniertialBA2());
@@ -201,7 +201,7 @@ void LocalMapping::Run()
                     }
                     else
                     {
-                        // Step 6.2 不是IMU模式或者当前关键帧所在的地图还未完成IMU初始化
+                        // Step 6.2 不是IMU模式或者当前关键帧所在的地图还未完成IMU初始化（IMU第一阶段初始化）
 						// 局部地图BA，不包括IMU数据
 						// 注意这里的第二个参数是按地址传递的,当这里的 mbAbortBA 状态发生变化时，能够及时执行/停止BA
                         // 局部地图优化，不包括IMU信息。优化关键帧位姿、地图点
@@ -232,11 +232,11 @@ void LocalMapping::Run()
 #endif
 
                 // Initialize IMU here
-                // Step 7 当前关键帧所在地图未完成IMU初始化（第一阶段）
+                // Step 7 当前关键帧所在地图未完成IMU初始化（IMU第一阶段初始化）
                 if(!mpCurrentKeyFrame->GetMap()->isImuInitialized() && mbInertial)
                 {
                     // 在函数InitializeIMU里设置IMU成功初始化标志 SetImuInitialized
-                    // IMU第一次初始化
+                    // 开始IMU第一次初始化（IMU第一阶段初始化）
                     if (mbMonocular)
                         InitializeIMU(1e2, 1e10, true);
                     else
@@ -256,13 +256,13 @@ void LocalMapping::Run()
                 timeKFCulling_ms = std::chrono::duration_cast<std::chrono::duration<double,std::milli> >(time_EndKFCulling - time_EndLBA).count();
                 vdKFCulling_ms.push_back(timeKFCulling_ms);
 #endif
-                // Step 9 如果距离IMU第一阶段初始化成功累计时间差小于100s，进行VIBA
+                // Step 9 如果距离IMU第一阶段初始化成功累计时间差小于100s，并且是IMU模式，进行VIBA
                 if ((mTinit<50.0f) && mbInertial)
-                {
-                    // Step 9.1 根据条件判断是否进行VIBA1（IMU第二次初始化）
-                    // 条件：1、当前关键帧所在的地图还未完成IMU初始化---并且--------2、正常跟踪状态----------
+                {                    
+                    // 条件：1、当前关键帧所在的地图已经完成IMU初始化（IMU第一阶段初始化）--并且--2、正常跟踪状态----------
                     if(mpCurrentKeyFrame->GetMap()->isImuInitialized() && mpTracker->mState==Tracking::OK) // Enter here everytime local-mapping is called
                     {
+                        // Step 9.1 根据条件判断是否进行VIBA1（IMU第二阶段初始化）
                         // 当前关键帧所在的地图还未完成VIBA 1
                         if(!mpCurrentKeyFrame->GetMap()->GetIniertialBA1()){
                             // 如果累计时间差大于5s，开始VIBA1（IMU第二阶段初始化）
@@ -278,9 +278,10 @@ void LocalMapping::Run()
                                 cout << "end VIBA 1" << endl;
                             }
                         }
-                        // Step 9.2 根据条件判断是否进行VIBA2（IMU第三次初始化）
+                        // Step 9.2 根据条件判断是否进行VIBA2（IMU第三阶段初始化）
                         // 当前关键帧所在的地图还未完成VIBA 2
                         else if(!mpCurrentKeyFrame->GetMap()->GetIniertialBA2()){
+                            // 如果累计时间差大于15s，开始VIBA2（IMU第三阶段初始化）
                             if (mTinit>15.0f){
                                 cout << "start VIBA 2" << endl;
                                 mpCurrentKeyFrame->GetMap()->SetIniertialBA2();
@@ -303,7 +304,7 @@ void LocalMapping::Run()
                                 (mTinit>65.0f && mTinit<65.5f)||
                                 (mTinit>75.0f && mTinit<75.5f))){
                             if (mbMonocular)
-                                // 使用了所有关键帧，但只优化尺度和重力方向以及速度和偏执（其实就是一切跟惯性相关的量）
+                                // 使用了所有关键帧，但只优化尺度、重力方向、速度和零偏（其实就是一切跟惯性相关的量）
                                 ScaleRefinement();
                         }
                     }
